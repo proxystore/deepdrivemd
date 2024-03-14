@@ -11,7 +11,8 @@ from typing import Any
 from colmena.queue.python import PipeQueues
 from colmena.task_server import ParslTaskServer
 from proxystore.store import register_store
-from proxystore.store.file import FileStore
+from proxystore.store.base import Store
+from proxystore.connectors.file import FileConnector
 
 from deepdrivemd.api import (  # InferenceCountDoneCallback,
     DeepDriveMDSettings,
@@ -175,7 +176,8 @@ if __name__ == "__main__":
     cfg.configure_logging()
 
     # Make the proxy store
-    store = FileStore(name="file", store_dir=str(cfg.run_dir / "proxy-store"))
+    connector = FileConnector(store_dir=str(cfg.run_dir / "proxy-store"))
+    store = Store(name="file", connector=connector)
     register_store(store)
 
     # Make the queues
