@@ -1,7 +1,8 @@
 parsl==2023.3.13
-pydantic==1.10.6
+pydantic==1.10.14
 pyyaml==6.0
-colmena==0.4.5
+colmena@git+https://github.com/exalearn/colmena@87447a4dc4fb2999b9bb83d95e2a8318110b05e5
+proxystore@git+https://github.com/proxystore/proxystore@9ca564a3741452fb4c6ad9ebfdc68401d9d0e7ca
 MDAnalysis==2.3.0
 mdlearn==0.0.10a1
 scikit-learn==1.1.3
