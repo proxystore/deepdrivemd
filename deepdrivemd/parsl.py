@@ -1,4 +1,5 @@
 """Utilities to build Parsl configurations."""
+
 from abc import ABC, abstractmethod
 from typing import Literal, Sequence, Tuple, Union
 

@@ -1,5 +1,6 @@
 """DeepDriveMD using OpenMM for simulation and a convolutional
 variational autoencoder for adaptive control."""
+
 import logging
 import time
 from argparse import ArgumentParser
@@ -8,11 +9,18 @@ from pathlib import Path
 from queue import Queue
 from typing import Any
 
+from colmena.models import Result
 from colmena.queue.python import PipeQueues
 from colmena.task_server import ParslTaskServer
+from colmena.thinker import agent, event_responder
 from proxystore.store import register_store
 from proxystore.store.base import Store
 from proxystore.connectors.file import FileConnector
+
+from proxystore.connectors.redis import RedisConnector
+from proxystore.store.future import Future
+from proxystore.stream.interface import StreamConsumer, StreamProducer
+from proxystore.stream.shims.redis import RedisPublisher, RedisSubscriber
 
 from deepdrivemd.api import (  # InferenceCountDoneCallback,
     DeepDriveMDSettings,
@@ -57,18 +65,32 @@ def run_train(input_data: CVAETrainInput, config: CVAETrainSettings) -> CVAETrai
 
 
 def run_inference(
-    input_data: CVAEInferenceInput, config: CVAEInferenceSettings
-) -> CVAEInferenceOutput:
+    model_weight_path: Path,
+    redis_host: str,
+    redis_port: int,
+    stop_inference: Future[bool],
+    config: CVAEInferenceSettings,
+) -> None:
     from deepdrivemd.apps.cvae_inference.app import CVAEInferenceApplication
 
-    app = CVAEInferenceApplication(config)
-    output_data = app.run(input_data)
-    return output_data
+    app = CVAEInferenceApplication(
+        config,
+        model_weight_path,
+        redis_host=redis_host,
+        redis_port=redis_port,
+        stop_inference=stop_inference,
+    )
+    app.run(redis_host, redis_port)
 
 
 class DeepDriveMD_OpenMM_CVAE(DeepDriveMDWorkflow):
     def __init__(
-        self, simulations_per_train: int, simulations_per_inference: int, **kwargs: Any
+        self,
+        simulations_per_train: int,
+        simulations_per_inference: int,
+        redis_host: str,
+        redis_port: int,
+        **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
 
@@ -87,6 +109,29 @@ class DeepDriveMD_OpenMM_CVAE(DeepDriveMDWorkflow):
 
         # Communicate results between agents
         self.simulation_input_queue: Queue[MDSimulationInput] = Queue()
+
+        self.redis_host = redis_host
+        self.redis_port = redis_port
+        self.store = Store(
+            "redis-store",
+            RedisConnector(redis_host, redis_port),
+        )
+
+        # Inference result consumer
+        self.stop_inference: Future[bool] | None = None
+        publisher = RedisPublisher(self.redis_host, self.redis_port)
+        subscriber = RedisSubscriber(
+            self.redis_host,
+            self.redis_port,
+            topic="inference-output",
+        )
+        self.inference_output_consumer = StreamConsumer[CVAEInferenceOutput](
+            subscriber,
+        )
+        self.inference_input_producer = StreamProducer[CVAEInferenceInput](
+            publisher,
+            {"inference-input": self.store, "inference-output": self.store},
+        )
 
     def simulate(self) -> None:
         """Select a method to start another simulation. If AI inference
@@ -114,7 +159,14 @@ class DeepDriveMD_OpenMM_CVAE(DeepDriveMDWorkflow):
         while not self.model_weights_available:
             time.sleep(1)
 
-        self.submit_task("inference", self.inference_input)
+        self.stop_inference: Future[bool] = store.future()
+        self.submit_task(
+            "inference",
+            self.inference_input.model_weight_path,
+            redis_host=self.redis_host,
+            redis_port=self.redis_port,
+            stop_inference=self.stop_inference,
+        )
         # self.inference_input.clear()  # Clear batched data
 
     def handle_simulation_output(self, output: MDSimulationOutput) -> None:
@@ -128,14 +180,33 @@ class DeepDriveMD_OpenMM_CVAE(DeepDriveMDWorkflow):
             self.run_training.set()
 
         if num_sims and (num_sims % self.simulations_per_inference == 0):
-            self.run_inference.set()
+            # self.run_inference.set()
+            self.logger.info("Sending inference input to 'inference-input' stream")
+            self.inference_input_producer.send(
+                "inference-input",
+                self.inference_input,
+            )
 
     def handle_train_output(self, output: CVAETrainOutput) -> None:
         self.inference_input.model_weight_path = output.model_weight_path
         self.model_weights_available = True
+        if self.stop_inference is not None:
+            # Stop the currently running inference worker via two different
+            # mechanisms
+            self.logger.info(
+                "Stopping current inference worker because of new model weights"
+            )
+            self.stop_inference.set_result(True)
+            self.inference_input_producer.close_topics("inference-input")
+        # Let the thinker know it's okay to start a new inference worker
+        # with the updated model weights
+        self.run_inference.set()
         self.logger.info(f"Updated model_weight_path to: {output.model_weight_path}")
 
     def handle_inference_output(self, output: CVAEInferenceOutput) -> None:
+        # This is a no-op because we process from the stream instead
+        return
+
         # Add restart points to simulation input queue while holding the lock
         # so that the simulations see the latest information. Note that
         # the output restart values should be sorted such that the first
@@ -154,6 +225,27 @@ class DeepDriveMD_OpenMM_CVAE(DeepDriveMDWorkflow):
             "new restart points to the simulation_input_queue."
         )
 
+    @agent
+    def handle_inference_output_stream(self) -> None:
+        for output in self.inference_output_consumer:
+            for sim_dir, sim_frame in zip(output.sim_dirs, output.sim_frames):
+                self.simulation_input_queue.put(
+                    MDSimulationInput(sim_dir=sim_dir, sim_frame=sim_frame)
+                )
+
+        self.logger.info("Done processing inference outputs.")
+
+    @agent
+    def stop_inference_output_stream(self) -> None:
+        while not self.done.is_set():
+            time.sleep(1)
+
+        # This will cause the inference_output_consumer to raise
+        # a StopIteration so handle_inference_output_stream breaks out
+        # of it's loop.
+        self.inference_input_producer.close_topics("inference-output")
+        self.logger.info("Closed 'inference-output' stream")
+
 
 class ExperimentSettings(DeepDriveMDSettings):
     """Provide a YAML interface to configure the experiment."""
@@ -170,6 +262,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "-t", "--test", action="store_true", help="Test Mock Application"
     )
+    parser.add_argument("--redis-host", help="Redis host.")
+    parser.add_argument("--redis-port", type=int, help="Redis port.")
     args = parser.parse_args()
     cfg = ExperimentSettings.from_yaml(args.config)
     cfg.dump_yaml(cfg.run_dir / "params.yaml")
@@ -216,6 +310,8 @@ if __name__ == "__main__":
             SimulationCountDoneCallback(cfg.num_total_simulations),
             TimeoutDoneCallback(cfg.duration_sec),
         ],
+        redis_host=args.redis_host,
+        redis_port=args.redis_port,
     )
     logging.info("Created the task server and task generator")
 
