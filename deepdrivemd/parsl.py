@@ -161,7 +161,7 @@ class PolarisSettings(BaseComputeSettings):
     retries: int = 1
     """Number of retries upon failure."""
 
-    def get_config(self, run_dir: PathLike) -> Config:
+    def config_factory(self, run_dir: PathLike) -> Config:
         """Create a parsl configuration for running on Polaris@ALCF.
 
         We will launch 4 workers per node, each pinned to a different GPU.
@@ -213,6 +213,69 @@ class PolarisSettings(BaseComputeSettings):
         )
 
 
+class PolarisHeadlessSettings(BaseComputeSettings):
+    """Polaris@ALCF settings.
+
+    See here for details: https://docs.alcf.anl.gov/polaris/workflows/parsl/
+    """
+
+    name: Literal["polaris-headless"] = "polaris-headless"  # type: ignore[assignment]
+    label: str = "htex"
+
+    num_nodes: int = 1
+    """Number of nodes in job"""
+    cpus_per_node: int = 32
+    """Up to 64 with multithreading."""
+    cores_per_worker: float = 8
+    """Number of cores per worker. Evenly distributed between GPUs."""
+    available_accelerators: int = 4
+    """Number of GPU to use."""
+
+    def config_factory(self, run_dir: PathLike) -> Config:
+        """Create a parsl configuration for running on Polaris@ALCF.
+
+        We will launch 4 workers per node, each pinned to a different GPU.
+
+        Parameters
+        ----------
+        run_dir: PathLike
+            Directory in which to store Parsl run files.
+        """
+        return Config(
+            executors=[
+                HighThroughputExecutor(
+                    label=self.label,
+                    heartbeat_period=15,
+                    heartbeat_threshold=120,
+                    worker_debug=True,
+                    # available_accelerators will override settings
+                    # for max_workers
+                    available_accelerators=self.available_accelerators,
+                    cores_per_worker=self.cores_per_worker,
+                    address=address_by_interface("bond0"),
+                    cpu_affinity="alternating",
+                    prefetch_capacity=0,
+                    provider=LocalProvider(
+                        launcher=MpiExecLauncher(
+                            bind_cmd="--cpu-bind",
+                            overrides="--depth=64 --ppn 1",
+                        ),
+                        cmd_timeout=120,
+                        nodes_per_block=self.num_nodes,
+                        init_blocks=1,
+                        max_blocks=1,
+                    )
+                ),
+            ],
+            run_dir=str(run_dir),
+            app_cache=True,
+        )
+
+
 ComputeSettingsTypes = Union[
-    LocalSettings, WorkstationSettings, LSFStJudeSettings, PolarisSettings
+    LocalSettings,
+    WorkstationSettings,
+    LSFStJudeSettings,
+    PolarisSettings,
+    PolarisHeadlessSettings,
 ]
