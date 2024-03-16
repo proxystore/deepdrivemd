@@ -50,17 +50,17 @@ class CVAEInferenceApplication(Application):
         self.stop_inference = stop_inference
 
     def run(self) -> None:
-        for input_data in self.consumer.iter_objects():
+        for metadata, input_data in self.consumer.iter_objects_with_metadata():
             # Note: it's possible we could get stuck waiting on the next object
             # if the stop_inference flag is set after we check it
             # and no new items are added to the inference-input stream.
             output_data = self.infer(input_data)
-            self.producer.send("inference-output", output_data)
+            self.producer.send("inference-output", output_data, metadata=metadata)
             if self.stop_inference.done():
                 break
 
-        self.producer.close(store=False)
-        self.consumer.close(store=False)
+        self.producer.close(stores=False)
+        self.consumer.close(stores=False)
 
     def infer(self, input_data: CVAEInferenceInput) -> CVAEInferenceOutput:
         # Log the input data
