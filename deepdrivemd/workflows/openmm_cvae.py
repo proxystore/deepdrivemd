@@ -88,6 +88,9 @@ class DeepDriveMD_OpenMM_CVAE(DeepDriveMDWorkflow):
         # Communicate results between agents
         self.simulation_input_queue: Queue[MDSimulationInput] = Queue()
 
+        self.inference_submitted_index = 0
+        self.inference_received_index = 0
+
     def simulate(self) -> None:
         """Select a method to start another simulation. If AI inference
         is currently adding new restart points to the queue, we block
@@ -114,6 +117,10 @@ class DeepDriveMD_OpenMM_CVAE(DeepDriveMDWorkflow):
         while not self.model_weights_available:
             time.sleep(1)
 
+        self.logger.info(
+            f"Submitting inference batch (batch: {self.inference_submitted_index})"
+        )
+        self.inference_submitted_index += 1
         self.submit_task("inference", self.inference_input)
         # self.inference_input.clear()  # Clear batched data
 
@@ -136,6 +143,10 @@ class DeepDriveMD_OpenMM_CVAE(DeepDriveMDWorkflow):
         self.logger.info(f"Updated model_weight_path to: {output.model_weight_path}")
 
     def handle_inference_output(self, output: CVAEInferenceOutput) -> None:
+        self.logger.info(
+            f"Received inference output (batch: {self.inference_received_index})"
+        )
+        self.inference_received_index += 1
         # Add restart points to simulation input queue while holding the lock
         # so that the simulations see the latest information. Note that
         # the output restart values should be sorted such that the first
