@@ -331,8 +331,8 @@ class DeepDriveMDWorkflow(BaseThinker):  # type: ignore[misc]
     @agent(startup=True)  # type: ignore[misc]
     def start_simulations(self) -> None:
         """Launch a first batch of simulations"""
-        # Save one worker for train/inference tasks
-        for _ in range(self.num_workers - 1):
+        # Save two workers for train/inference tasks
+        for _ in range(self.num_workers - 2):
             self.simulate()
 
     @result_processor(topic="simulation")  # type: ignore[misc]
