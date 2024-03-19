@@ -20,7 +20,7 @@ from proxystore.connectors.file import FileConnector
 from proxystore.connectors.redis import RedisConnector
 from proxystore.store.future import Future
 from proxystore.stream.interface import StreamConsumer, StreamProducer
-from proxystore.stream.shims.redis import RedisPublisher, RedisSubscriber
+from proxystore.stream.shims.redis import RedisQueuePublisher, RedisQueueSubscriber
 
 from deepdrivemd.api import (  # InferenceCountDoneCallback,
     DeepDriveMDSettings,
@@ -120,8 +120,8 @@ class DeepDriveMD_OpenMM_CVAE(DeepDriveMDWorkflow):
         # Inference result consumer
         self.inference_batch_index = 0
         self.stop_inference: Future[bool] | None = None
-        publisher = RedisPublisher(self.redis_host, self.redis_port)
-        subscriber = RedisSubscriber(
+        publisher = RedisQueuePublisher(self.redis_host, self.redis_port)
+        subscriber = RedisQueueSubscriber(
             self.redis_host,
             self.redis_port,
             topic="inference-output",

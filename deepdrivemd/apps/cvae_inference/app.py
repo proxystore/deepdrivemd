@@ -8,7 +8,7 @@ from sklearn.neighbors import LocalOutlierFactor
 
 from proxystore.store.future import Future
 from proxystore.stream.interface import StreamConsumer, StreamProducer
-from proxystore.stream.shims.redis import RedisPublisher, RedisSubscriber
+from proxystore.stream.shims.redis import RedisQueuePublisher, RedisQueueSubscriber
 
 from deepdrivemd.api import Application
 from deepdrivemd.apps.cvae_inference import (
@@ -43,8 +43,8 @@ class CVAEInferenceApplication(Application):
         self.trainer.model.load_state_dict(checkpoint["model_state_dict"])
 
         store = stop_inference._factory.get_store()
-        publisher = RedisPublisher(redis_host, redis_port)
-        subscriber = RedisSubscriber(redis_host, redis_port, "inference-input")
+        publisher = RedisQueuePublisher(redis_host, redis_port)
+        subscriber = RedisQueueSubscriber(redis_host, redis_port, "inference-input")
         self.producer = StreamProducer(publisher, stores={"inference-output": store})
         self.consumer = StreamConsumer(subscriber)
         self.stop_inference = stop_inference
