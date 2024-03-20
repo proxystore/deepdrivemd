@@ -8,7 +8,7 @@ from sklearn.neighbors import LocalOutlierFactor
 
 from proxystore.store.future import Future
 from proxystore.stream.interface import StreamConsumer, StreamProducer
-from proxystore.stream.shims.redis import RedisQueuePublisher, RedisQueueSubscriber
+from proxystore.stream.shims.redis import RedisPublisher, RedisSubscriber
 
 from deepdrivemd.api import Application
 from deepdrivemd.apps.cvae_inference import (
@@ -25,26 +25,21 @@ class CVAEInferenceApplication(Application):
     def __init__(
         self,
         config: CVAEInferenceSettings,
-        model_weight_path: Path,
         redis_host: str,
         redis_port: int,
         stop_inference: Future[bool],
     ) -> None:
         super().__init__(config)
-
         # Initialize the model
         self.cvae_settings = CVAESettings.from_yaml(
             self.config.cvae_settings_yaml
         ).dict()
-        self.trainer = SymmetricConv2dVAETrainer(**self.cvae_settings)
-
-        # Load model weights to use for inference
-        checkpoint = torch.load(model_weight_path, map_location=self.trainer.device)
-        self.trainer.model.load_state_dict(checkpoint["model_state_dict"])
+        self.current_model_weight_path: Path | None = None
+        self.trainer: SymmetricConv2dVAETrainer | None = None
 
         store = stop_inference._factory.get_store()
-        publisher = RedisQueuePublisher(redis_host, redis_port)
-        subscriber = RedisQueueSubscriber(redis_host, redis_port, "inference-input")
+        publisher = RedisPublisher(redis_host, redis_port)
+        subscriber = RedisSubscriber(redis_host, redis_port, "inference-input")
         self.producer = StreamProducer(publisher, stores={"inference-output": store})
         self.consumer = StreamConsumer(subscriber)
         self.stop_inference = stop_inference
@@ -62,7 +57,19 @@ class CVAEInferenceApplication(Application):
         self.producer.close(stores=False)
         self.consumer.close(stores=False)
 
+    def load_model(self, model_weight_path: Path) -> None:
+        self.trainer = SymmetricConv2dVAETrainer(**self.cvae_settings)
+
+        # Load model weights to use for inference
+        checkpoint = torch.load(model_weight_path, map_location=self.trainer.device)
+        self.trainer.model.load_state_dict(checkpoint["model_state_dict"])
+
     def infer(self, input_data: CVAEInferenceInput) -> CVAEInferenceOutput:
+        # Load the model if we don't have one already or this is a new
+        # model requested for inference.
+        if self.current_model_weight_path != input_data.model_weight_path:
+            self.load_model(input_data.model_weight_path)
+
         # Log the input data
         input_data.dump_yaml(self.workdir / "input.yaml")
 

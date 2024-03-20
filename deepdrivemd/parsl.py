@@ -264,7 +264,7 @@ class PolarisHeadlessSettings(BaseComputeSettings):
                         nodes_per_block=self.num_nodes,
                         init_blocks=1,
                         max_blocks=1,
-                    )
+                    ),
                 ),
             ],
             run_dir=str(run_dir),

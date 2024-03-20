@@ -20,7 +20,7 @@ from proxystore.connectors.file import FileConnector
 from proxystore.connectors.redis import RedisConnector
 from proxystore.store.future import Future
 from proxystore.stream.interface import StreamConsumer, StreamProducer
-from proxystore.stream.shims.redis import RedisQueuePublisher, RedisQueueSubscriber
+from proxystore.stream.shims.redis import RedisPublisher, RedisSubscriber
 
 from deepdrivemd.api import (  # InferenceCountDoneCallback,
     DeepDriveMDSettings,
@@ -65,7 +65,6 @@ def run_train(input_data: CVAETrainInput, config: CVAETrainSettings) -> CVAETrai
 
 
 def run_inference(
-    model_weight_path: Path,
     redis_host: str,
     redis_port: int,
     stop_inference: Future[bool],
@@ -75,7 +74,6 @@ def run_inference(
 
     app = CVAEInferenceApplication(
         config,
-        model_weight_path,
         redis_host=redis_host,
         redis_port=redis_port,
         stop_inference=stop_inference,
@@ -120,8 +118,8 @@ class DeepDriveMD_OpenMM_CVAE(DeepDriveMDWorkflow):
         # Inference result consumer
         self.inference_batch_index = 0
         self.stop_inference: Future[bool] | None = None
-        publisher = RedisQueuePublisher(self.redis_host, self.redis_port)
-        subscriber = RedisQueueSubscriber(
+        publisher = RedisPublisher(self.redis_host, self.redis_port)
+        subscriber = RedisSubscriber(
             self.redis_host,
             self.redis_port,
             topic="inference-output",
@@ -133,6 +131,9 @@ class DeepDriveMD_OpenMM_CVAE(DeepDriveMDWorkflow):
             publisher,
             {"inference-input": self.store, "inference-output": self.store},
         )
+
+        # Signal we can start inference worker now.
+        self.run_inference.set()
 
     def simulate(self) -> None:
         """Select a method to start another simulation. If AI inference
@@ -158,15 +159,11 @@ class DeepDriveMD_OpenMM_CVAE(DeepDriveMDWorkflow):
     def inference(self) -> None:
         # Inference must wait for a trained model to be available
         while not self.model_weights_available:
-            # We should not be starting the run_inference task until we've
-            # received the first trained model.
-            assert False
             time.sleep(1)
 
         self.stop_inference: Future[bool] = store.future()
         self.submit_task(
             "inference",
-            self.inference_input.model_weight_path,
             self.redis_host,
             self.redis_port,
             self.stop_inference,
@@ -183,8 +180,12 @@ class DeepDriveMD_OpenMM_CVAE(DeepDriveMDWorkflow):
         if num_sims and (num_sims % self.simulations_per_train == 0):
             self.run_training.set()
 
-        if num_sims and (num_sims % self.simulations_per_inference == 0):
-            # self.run_inference.set()
+        if (
+            num_sims
+            and (num_sims % self.simulations_per_inference == 0)
+            and self.model_weights_available
+        ):
+            assert self.inference_input.model_weight_path.is_file()
             self.logger.info(
                 "Sending inference input to 'inference-input' stream "
                 f"(batch: {self.inference_batch_index})"
@@ -192,27 +193,13 @@ class DeepDriveMD_OpenMM_CVAE(DeepDriveMDWorkflow):
             self.inference_input_producer.send(
                 "inference-input",
                 self.inference_input,
-                metadata={'index': self.inference_batch_index},
+                metadata={"index": self.inference_batch_index},
             )
             self.inference_batch_index += 1
 
     def handle_train_output(self, output: CVAETrainOutput) -> None:
         self.inference_input.model_weight_path = output.model_weight_path
         self.model_weights_available = True
-        if self.stop_inference is not None:
-            # Stop the currently running inference worker via two different
-            # mechanisms
-            self.logger.info(
-                "Stopping current inference worker because of new model weights"
-            )
-            self.stop_inference.set_result(True)
-            self.inference_input_producer.close_topics("inference-input")
-            # Quick hack to allow us to reuse topic
-            self.inference_input_producer._buffer["inference-input"].closed = False
-        # Let the thinker know it's okay to start a new inference worker
-        # with the updated model weights
-        self.logger.info("Received new model weights. Setting run_inference event")
-        self.run_inference.set()
         self.logger.info(f"Updated model_weight_path to: {output.model_weight_path}")
 
     def handle_inference_output(self, output: CVAEInferenceOutput) -> None:
@@ -239,7 +226,10 @@ class DeepDriveMD_OpenMM_CVAE(DeepDriveMDWorkflow):
 
     @agent
     def handle_inference_output_stream(self) -> None:
-        for metadata, output in self.inference_output_consumer.iter_objects_with_metadata():
+        for (
+            metadata,
+            output,
+        ) in self.inference_output_consumer.iter_objects_with_metadata():
             self.logger.info(
                 f"Received inference output (batch: {metadata['index']})",
             )
@@ -255,6 +245,7 @@ class DeepDriveMD_OpenMM_CVAE(DeepDriveMDWorkflow):
         while not self.done.is_set():
             time.sleep(1)
 
+        self.stop_inference.set_result(True)
         # This will cause the inference_output_consumer to raise
         # a StopIteration so handle_inference_output_stream breaks out
         # of it's loop.
