@@ -35,7 +35,7 @@ class CVAEInferenceApplication(Application):
             self.config.cvae_settings_yaml
         ).dict()
         self.current_model_weight_path: Path | None = None
-        self.trainer: SymmetricConv2dVAETrainer | None = None
+        self.trainer = SymmetricConv2dVAETrainer(**self.cvae_settings)
 
         store = stop_inference._factory.get_store()
         publisher = RedisPublisher(redis_host, redis_port)
@@ -58,8 +58,6 @@ class CVAEInferenceApplication(Application):
         self.consumer.close(stores=False)
 
     def load_model(self, model_weight_path: Path) -> None:
-        self.trainer = SymmetricConv2dVAETrainer(**self.cvae_settings)
-
         # Load model weights to use for inference
         checkpoint = torch.load(model_weight_path, map_location=self.trainer.device)
         self.trainer.model.load_state_dict(checkpoint["model_state_dict"])

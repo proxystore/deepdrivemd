@@ -226,17 +226,18 @@ class DeepDriveMD_OpenMM_CVAE(DeepDriveMDWorkflow):
 
     @agent
     def handle_inference_output_stream(self) -> None:
-        for (
-            metadata,
-            output,
-        ) in self.inference_output_consumer.iter_objects_with_metadata():
+        consumer = self.inference_output_consumer.iter_objects_with_metadata()
+        for metadata, output in consumer:
             self.logger.info(
                 f"Received inference output (batch: {metadata['index']})",
             )
-            for sim_dir, sim_frame in zip(output.sim_dirs, output.sim_frames):
-                self.simulation_input_queue.put(
-                    MDSimulationInput(sim_dir=sim_dir, sim_frame=sim_frame)
-                )
+            with self.simulation_govenor:
+                self.simulation_input_queue.queue.clear()
+                
+                for sim_dir, sim_frame in zip(output.sim_dirs, output.sim_frames):
+                    self.simulation_input_queue.put(
+                        MDSimulationInput(sim_dir=sim_dir, sim_frame=sim_frame)
+                    )
 
         self.logger.info("Done processing inference outputs.")
 
