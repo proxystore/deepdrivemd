@@ -391,16 +391,21 @@ class DeepDriveMDWorkflow(BaseThinker):  # type: ignore[misc]
         self.inference()
 
         # Wait for the result to complete
-        result: Result = self.queues.get_result(topic="inference")
-        self.logger.info("Received inference result")
+        metadata, output = self.inference_output_consumer.next_object_with_metadata()
+        self.logger.info(
+            f"Received inference output (batch: {metadata['index']})",
+        )
+        self.handle_inference_output(output)
+        # result: Result = self.queues.get_result(topic="inference")
+        # self.logger.info("Received inference result")
 
-        self.log_result(result, "inference")
-        if not result.success:
-            return self.logger.warning("Bad inference result")
+        # self.log_result(result, "inference")
+        # if not result.success:
+        #     return self.logger.warning("Bad inference result")
 
         # Process the inference output
-        self.handle_inference_output(result.value)
-        self.logger.info("Inference process is complete")
+        # self.handle_inference_output(result.value)
+        # self.logger.info("Inference process is complete")
 
     @abstractmethod
     def simulate(self) -> None:

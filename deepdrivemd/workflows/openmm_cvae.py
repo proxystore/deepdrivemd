@@ -20,7 +20,7 @@ from proxystore.connectors.file import FileConnector
 from proxystore.connectors.redis import RedisConnector
 from proxystore.store.future import Future
 from proxystore.stream.interface import StreamConsumer, StreamProducer
-from proxystore.stream.shims.redis import RedisPublisher, RedisSubscriber
+from proxystore.stream.shims.redis import RedisQueuePublisher, RedisQueueSubscriber
 
 from deepdrivemd.api import (  # InferenceCountDoneCallback,
     DeepDriveMDSettings,
@@ -118,12 +118,14 @@ class DeepDriveMD_OpenMM_CVAE(DeepDriveMDWorkflow):
         # Inference result consumer
         self.inference_batch_index = 0
         self.stop_inference: Future[bool] | None = None
-        publisher = RedisPublisher(self.redis_host, self.redis_port)
-        subscriber = RedisSubscriber(
+        publisher = RedisQueuePublisher(self.redis_host, self.redis_port)
+        subscriber = RedisQueueSubscriber(
             self.redis_host,
             self.redis_port,
             topic="inference-output",
         )
+        # Clear current queues
+        publisher._redis_client.delete("inference-input", "inference-output")
         self.inference_output_consumer = StreamConsumer[CVAEInferenceOutput](
             subscriber,
         )
@@ -161,13 +163,26 @@ class DeepDriveMD_OpenMM_CVAE(DeepDriveMDWorkflow):
         while not self.model_weights_available:
             time.sleep(1)
 
-        self.stop_inference: Future[bool] = store.future()
-        self.submit_task(
-            "inference",
-            self.redis_host,
-            self.redis_port,
-            self.stop_inference,
+        if self.stop_inference is None:
+            # First inference batch so we need to submit the task
+            self.stop_inference: Future[bool] = store.future()
+            self.submit_task(
+                "inference",
+                self.redis_host,
+                self.redis_port,
+                self.stop_inference,
+            )
+
+        self.logger.info(
+            "Sending inference input to 'inference-input' stream "
+            f"(batch: {self.inference_batch_index})"
         )
+        self.inference_input_producer.send(
+            "inference-input",
+            self.inference_input,
+            metadata={"index": self.inference_batch_index},
+        )
+        self.inference_batch_index += 1
         # self.inference_input.clear()  # Clear batched data
 
     def handle_simulation_output(self, output: MDSimulationOutput) -> None:
@@ -180,22 +195,8 @@ class DeepDriveMD_OpenMM_CVAE(DeepDriveMDWorkflow):
         if num_sims and (num_sims % self.simulations_per_train == 0):
             self.run_training.set()
 
-        if (
-            num_sims
-            and (num_sims % self.simulations_per_inference == 0)
-            and self.model_weights_available
-        ):
-            assert self.inference_input.model_weight_path.is_file()
-            self.logger.info(
-                "Sending inference input to 'inference-input' stream "
-                f"(batch: {self.inference_batch_index})"
-            )
-            self.inference_input_producer.send(
-                "inference-input",
-                self.inference_input,
-                metadata={"index": self.inference_batch_index},
-            )
-            self.inference_batch_index += 1
+        if num_sims and (num_sims % self.simulations_per_inference == 0):
+            self.run_inference.set()
 
     def handle_train_output(self, output: CVAETrainOutput) -> None:
         self.inference_input.model_weight_path = output.model_weight_path
@@ -203,9 +204,6 @@ class DeepDriveMD_OpenMM_CVAE(DeepDriveMDWorkflow):
         self.logger.info(f"Updated model_weight_path to: {output.model_weight_path}")
 
     def handle_inference_output(self, output: CVAEInferenceOutput) -> None:
-        # This is a no-op because we process from the stream instead
-        return
-
         # Add restart points to simulation input queue while holding the lock
         # so that the simulations see the latest information. Note that
         # the output restart values should be sorted such that the first
@@ -224,22 +222,16 @@ class DeepDriveMD_OpenMM_CVAE(DeepDriveMDWorkflow):
             "new restart points to the simulation_input_queue."
         )
 
-    @agent
-    def handle_inference_output_stream(self) -> None:
-        consumer = self.inference_output_consumer.iter_objects_with_metadata()
-        for metadata, output in consumer:
-            self.logger.info(
-                f"Received inference output (batch: {metadata['index']})",
-            )
-            with self.simulation_govenor:
-                self.simulation_input_queue.queue.clear()
-                
-                for sim_dir, sim_frame in zip(output.sim_dirs, output.sim_frames):
-                    self.simulation_input_queue.put(
-                        MDSimulationInput(sim_dir=sim_dir, sim_frame=sim_frame)
-                    )
+    # @agent
+    # def handle_inference_output_stream(self) -> None:
+    #     consumer = self.inference_output_consumer.iter_objects_with_metadata()
+    #     for metadata, output in consumer:
+    #         self.logger.info(
+    #             f"Received inference output (batch: {metadata['index']})",
+    #         )
+    #         self.handle_inference_output(output)
 
-        self.logger.info("Done processing inference outputs.")
+    #     self.logger.info("Done processing inference outputs.")
 
     @agent
     def stop_inference_output_stream(self) -> None:
