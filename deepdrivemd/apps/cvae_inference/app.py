@@ -7,6 +7,7 @@ from mdlearn.nn.models.vae.symmetric_conv2d_vae import SymmetricConv2dVAETrainer
 from sklearn.neighbors import LocalOutlierFactor
 
 from proxystore.store.future import Future
+from proxystore.store.ref import into_owned
 from proxystore.stream.interface import StreamConsumer, StreamProducer
 from proxystore.stream.shims.redis import RedisQueuePublisher, RedisQueueSubscriber
 
@@ -45,10 +46,11 @@ class CVAEInferenceApplication(Application):
         self.stop_inference = stop_inference
 
     def run(self) -> None:
-        for metadata, input_data in self.consumer.iter_objects_with_metadata():
+        for metadata, input_data in self.consumer.iter_with_metadata():
             # Note: it's possible we could get stuck waiting on the next object
             # if the stop_inference flag is set after we check it
             # and no new items are added to the inference-input stream.
+            input_data = into_owned(input_data)
             output_data = self.infer(input_data)
             self.producer.send("inference-output", output_data, metadata=metadata)
             if self.stop_inference.done():

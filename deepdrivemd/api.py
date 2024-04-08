@@ -16,6 +16,7 @@ import yaml
 from colmena.models import Result
 from colmena.queue import ColmenaQueues
 from colmena.thinker import BaseThinker, agent, event_responder, result_processor
+from proxystore.store.ref import into_owned
 from pydantic import BaseSettings as _BaseSettings
 from pydantic import root_validator, validator
 
@@ -391,21 +392,12 @@ class DeepDriveMDWorkflow(BaseThinker):  # type: ignore[misc]
         self.inference()
 
         # Wait for the result to complete
-        metadata, output = self.inference_output_consumer.next_object_with_metadata()
+        metadata, output = self.inference_output_consumer.next_with_metadata()
+        output = into_owned(output)
         self.logger.info(
             f"Received inference output (batch: {metadata['index']})",
         )
         self.handle_inference_output(output)
-        # result: Result = self.queues.get_result(topic="inference")
-        # self.logger.info("Received inference result")
-
-        # self.log_result(result, "inference")
-        # if not result.success:
-        #     return self.logger.warning("Bad inference result")
-
-        # Process the inference output
-        # self.handle_inference_output(result.value)
-        # self.logger.info("Inference process is complete")
 
     @abstractmethod
     def simulate(self) -> None:

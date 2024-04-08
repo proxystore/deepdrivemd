@@ -222,17 +222,6 @@ class DeepDriveMD_OpenMM_CVAE(DeepDriveMDWorkflow):
             "new restart points to the simulation_input_queue."
         )
 
-    # @agent
-    # def handle_inference_output_stream(self) -> None:
-    #     consumer = self.inference_output_consumer.iter_objects_with_metadata()
-    #     for metadata, output in consumer:
-    #         self.logger.info(
-    #             f"Received inference output (batch: {metadata['index']})",
-    #         )
-    #         self.handle_inference_output(output)
-
-    #     self.logger.info("Done processing inference outputs.")
-
     @agent
     def stop_inference_output_stream(self) -> None:
         while not self.done.is_set():
