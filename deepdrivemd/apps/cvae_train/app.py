@@ -35,6 +35,7 @@ class CVAETrainApplication(Application):
             [np.load(p, allow_pickle=True) for p in input_data.contact_map_paths]
         )
         rmsds = np.concatenate([np.load(p) for p in input_data.rmsd_paths])
+        assert len(contact_maps) >= 2
 
         # Train model
         model_dir = self.workdir / "model"  # Need to create new directory

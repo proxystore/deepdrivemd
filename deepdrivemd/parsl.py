@@ -55,6 +55,7 @@ class LocalSettings(BaseComputeSettings):
                     provider=LocalProvider(init_blocks=1, max_blocks=1),  # type: ignore[no-untyped-call]
                 ),
             ],
+            initialize_logging=False,
         )
 
 
@@ -82,6 +83,7 @@ class WorkstationSettings(BaseComputeSettings):
                     provider=LocalProvider(init_blocks=1, max_blocks=1),  # type: ignore[no-untyped-call]
                 ),
             ],
+            initialize_logging=False,
         )
 
 
@@ -127,6 +129,7 @@ class LSFStJudeSettings(BaseComputeSettings):
                     ),
                 )
             ],
+            initialize_logging=False,
         )
 
 
@@ -209,6 +212,7 @@ class PolarisSettings(BaseComputeSettings):
             run_dir=str(run_dir),
             retries=self.retries,
             app_cache=True,
+            initialize_logging=False,
         )
 
 
@@ -268,6 +272,7 @@ class PolarisHeadlessSettings(BaseComputeSettings):
             ],
             run_dir=str(run_dir),
             app_cache=True,
+            initialize_logging=False,
         )
 
 

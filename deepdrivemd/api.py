@@ -16,6 +16,7 @@ import yaml
 from colmena.models import Result
 from colmena.queue import ColmenaQueues
 from colmena.thinker import BaseThinker, agent, event_responder, result_processor
+from proxystore.store.ref import into_owned
 from pydantic import BaseSettings as _BaseSettings
 from pydantic import root_validator, validator
 
@@ -445,3 +446,57 @@ class DeepDriveMDWorkflow(BaseThinker):  # type: ignore[misc]
     def handle_inference_output(self, output: Any) -> None:
         """Use the output from an inference run to update the list of available simulations"""
         ...
+
+
+class DeepDriveMDStreamWorkflow(DeepDriveMDWorkflow):  # type: ignore[misc]
+    def __init__(
+        self,
+        queue: ColmenaQueues,
+        result_dir: Path,
+        simulation_input_dir: Path,
+        num_workers: int,
+        done_callbacks: List[DoneCallback],
+    ) -> None:
+        """
+        Parameters
+        ----------
+        queue:
+            Queue used to communicate with the task server
+        result_dir:
+            Directory in which to store outputs
+        simulation_input_dir:
+            Directory with subdirectories each storing initial simulation start files.
+        num_workers:
+            Number of workers available for executing simulations, training,
+            and inference tasks. One shared worker is reserved for training
+            inference task, the rest (num_workers - 1) go to simulation.
+        done_callbacks:
+            Callbacks that can trigger a run to end
+        """
+        super().__init__(
+            queue=queue,
+            result_dir=result_dir,
+            simulation_input_dir=simulation_input_dir,
+            num_workers=num_workers,
+            done_callbacks=done_callbacks,
+        )
+
+    @event_responder(event_name="run_inference")  # type: ignore[misc]
+    def perform_inference(self) -> None:
+        self.logger.info("Started inference process")
+        # Send in an inference task
+        self.inference()
+
+        # Wait for the result to complete
+        try:
+            metadata, output = self.inference_output_consumer.next_with_metadata()
+        except StopIteration:
+            self.logger.exception(
+                f'Inference worker unexpectedly closed stream',
+            )
+            return
+        output = into_owned(output)
+        self.logger.info(
+            f"Received inference output (batch: {metadata['index']})",
+        )
+        self.handle_inference_output(output)

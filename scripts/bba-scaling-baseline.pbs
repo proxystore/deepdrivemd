@@ -1,0 +1,15 @@
+#!/bin/bash
+#PBS -A SuperBERT
+#PBS -q prod
+#PBS -l select=10
+#PBS -l walltime=3:00:00
+#PBS -l filesystems=home
+#PBS -j oe
+
+cd /home/jgpaul/workspace-polaris/deepdrivemd
+git checkout sc24-baseline
+
+module load conda/2023-10-04
+conda activate /home/jgpaul/workspace-polaris/deepdrivemd/env
+
+python -m deepdrivemd.workflows.openmm_cvae -c examples/bba-folding-proxystream/prod.yaml

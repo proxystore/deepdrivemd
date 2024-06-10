@@ -1,0 +1,27 @@
+#!/bin/bash
+#PBS -A SuperBERT
+#PBS -q prod
+#PBS -l select=10
+#PBS -l walltime=3:00:00
+#PBS -l filesystems=home
+#PBS -j oe
+
+cd /home/jgpaul/workspace-polaris/deepdrivemd
+git checkout sc24-proxystream
+
+module load conda/2023-10-04
+conda activate /home/jgpaul/workspace-polaris/deepdrivemd/env
+
+PORT=59465
+redis-server --port $PORT --save "" --appendonly no --protected-mode no --client-output-buffer-limit "pubsub 1GB 1GB 1" --maxmemory 0 &> /dev/null &
+REDIS=$!
+echo "Redis started on port $PORT."
+
+PRIMARY_RANK=$(head -n 1 $PBS_NODEFILE)
+
+python -m deepdrivemd.workflows.openmm_cvae_stream -c examples/bba-folding-proxystream/prod.yaml \
+    --redis-host $PRIMARY_RANK --redis-port $PORT
+
+kill $REDIS
+echo "Stopped Redis."
+echo "Done."
